@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, GoneException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
@@ -70,11 +70,13 @@ export class PaymentsService {
     const memo = this.stellar.generateMemo();
     const depositAddress = this.stellar.getDepositAddress();
 
-    const stellarUri = `web+stellar:pay?destination=${depositAddress}&amount=${amountXlm.toFixed(7)}&memo=${memo}&memo_type=text`;
-    const qrCode = await QRCode.toDataURL(stellarUri);
-
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + (dto.expiryMinutes ?? 30));
+
+    // Bake expiry into the QR payload so the frontend can render a visual
+    // countdown/expiry indicator without an extra clock source (#545).
+    const stellarUri = `web+stellar:pay?destination=${depositAddress}&amount=${amountXlm.toFixed(7)}&memo=${memo}&memo_type=text&expires=${encodeURIComponent(expiresAt.toISOString())}`;
+    const qrCode = await QRCode.toDataURL(stellarUri);
 
     const payment = this.paymentsRepo.create({
       id: uuidv4(),
@@ -338,6 +340,9 @@ export class PaymentsService {
   async findByReference(reference: string): Promise<Payment> {
     const payment = await this.paymentsRepo.findOne({ where: { reference } });
     if (!payment) throw new NotFoundException('Payment not found');
+    if (payment.expiresAt && new Date(payment.expiresAt).getTime() < Date.now()) {
+      throw new GoneException('Payment QR code has expired');
+    }
     return payment;
   }
 
