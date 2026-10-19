@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Post, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, UseGuards, Request, Query } from '@nestjs/common';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -50,6 +50,23 @@ export class MerchantsController {
   @ApiResponse({ status: 500, description: 'Internal server error' })
   update(@Request() req: { user: { merchantId: string } }, @Body() dto: UpdateMerchantDto) {
     return this.merchantsService.update(req.user.merchantId, dto);
+  }
+
+  @Get('audit-log')
+  @Scopes('profile:read')
+  @ApiOperation({ summary: 'List merchant settings audit log (paginated)' })
+  @ApiOkResponse({ description: 'Paginated audit entries' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid JWT / API key' })
+  getAuditLog(
+    @Request() req: { user: { merchantId: string } },
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.merchantsService.getAuditLog(
+      req.user.merchantId,
+      page ? parseInt(page, 10) : 1,
+      limit ? parseInt(limit, 10) : 20,
+    );
   }
 
   @Post('api-keys')

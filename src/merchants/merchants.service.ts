@@ -43,6 +43,8 @@ export class MerchantsService {
   async update(id: string, dto: UpdateMerchantDto): Promise<Merchant> {
     const merchant = await this.findOne(id);
 
+    const before = this.toAuditSnapshot(merchant);
+
     if (dto.businessName !== undefined) merchant.businessName = dto.businessName;
     if (dto.businessType !== undefined) merchant.businessType = dto.businessType;
     if (dto.country !== undefined) merchant.country = dto.country;
@@ -52,7 +54,51 @@ export class MerchantsService {
 
     const updated = await this.merchantsRepo.save(merchant);
     await this.cache.del(this.activeMerchantCountCacheKey);
+
+    // Audit every merchant settings change (#543). Sensitive bank account
+    // numbers are masked; never persisted in cleartext in the log.
+    const after = this.toAuditSnapshot(updated);
+    await this.auditLogRepo.save({
+      actor: id,
+      action: 'MERCHANT_SETTINGS_UPDATED',
+      resource: `merchant:${id}`,
+      before,
+      after,
+    });
+
     return updated;
+  }
+
+  /** Auditable merchant settings snapshot with bank account masked. */
+  private toAuditSnapshot(m: Merchant): Record<string, unknown> {
+    return {
+      businessName: m.businessName ?? null,
+      businessType: m.businessType ?? null,
+      country: m.country ?? null,
+      bankAccountNumber: m.bankAccountNumber
+        ? `****${String(m.bankAccountNumber).slice(-4)}`
+        : null,
+      bankCode: m.bankCode ?? null,
+      bankName: m.bankName ?? null,
+    };
+  }
+
+  /** Paginated audit log for the merchant's own settings changes (#543). */
+  async getAuditLog(merchantId: string, page = 1, limit = 20) {
+    const [items, total] = await this.auditLogRepo.findAndCount({
+      where: { resource: `merchant:${merchantId}` },
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    const mapped = items.map((e) => ({
+      actorId: (e as unknown as Record<string, unknown>).actor,
+      action: (e as unknown as Record<string, unknown>).action,
+      before: (e as unknown as Record<string, unknown>).before,
+      after: (e as unknown as Record<string, unknown>).after,
+      timestamp: (e as unknown as Record<string, unknown>).createdAt,
+    }));
+    return { items: mapped, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async generateApiKey(
